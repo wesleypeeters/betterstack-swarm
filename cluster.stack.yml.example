@@ -1,0 +1,20 @@
+# Example cluster overlay. Copy to <cluster>.stack.yml (e.g. prod.stack.yml);
+# in CI mode rig merges it instead of ci.stack.yml when CLUSTER=<cluster>, so it
+# repeats the placement and adds the overlay networks of the databases the
+# collector should monitor. Cluster overlays are git-ignored.
+services:
+  collector:
+    networks: [default, app-db]
+    deploy:
+      placement:
+        constraints:
+          - node.labels.better-stack.collector == true
+  ebpf-host:
+    deploy:
+      placement:
+        constraints:
+          - node.labels.better-stack.collector == true
+
+networks:
+  app-db:
+    external: true

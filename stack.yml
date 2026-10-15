@@ -1,0 +1,102 @@
+x-rig:
+  name: better-stack
+
+x-ebpf-image: &ebpf-image ghcr.io/betterstackhq/collector-ebpf:1.1.49@sha256:c04b4860b0352ce7102cd78d55d0b1a8f274080eef52ede5e8bf8548577e936f
+
+services:
+  # Logs (Vector), host metrics and database discovery. One task per node.
+  collector:
+    image: ghcr.io/betterstackhq/collector:1.1.49@sha256:2aea047d4fcbc7b24ef4cef16a7b10ba2d9a169cec3b8cbc5185a0b1a53d5a30
+    hostname: "{{.Node.Hostname}}"
+    # The image only reads COLLECTOR_SECRET from its environment; the wrapper
+    # exports it from the Docker secret so it never lands in the service spec.
+    entrypoint: ["/usr/bin/tini", "-s", "--", "/bin/sh", "/collector-entrypoint.sh"]
+    configs:
+      - source: collector-entrypoint
+        target: /collector-entrypoint.sh
+    environment:
+      BASE_URL: ${BASE_URL:-https://telemetry.betterstack.com}
+      CLUSTER_COLLECTOR: ${CLUSTER_COLLECTOR:-false}
+      VECTOR_LOG_FORMAT: json
+      COLLECT_OTEL_HTTP_PORT:
+      COLLECT_OTEL_GRPC_PORT:
+      INSTALLED_AS: swarm
+    secrets:
+      - collector_secret
+    volumes:
+      # Read-only view of the host for metrics and log files. Narrow this in an
+      # overlay if you don't want the whole filesystem visible.
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+      # Shared with the eBPF container (unix socket, runtime-delivered files).
+      # Swarm won't create a missing bind source; the ebpf-host service's
+      # `docker run -v` creates it on first start, so the first collector task
+      # on a fresh node may fail once and be retried.
+      - type: bind
+        source: /var/lib/better-stack
+        target: /var/lib/better-stack
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -x /var/lib/better-stack/collector/healthcheck.sh ]; then /var/lib/better-stack/collector/healthcheck.sh; else exit 0; fi"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: stop-first
+
+  # Swarm can't run privileged / pid:host / network:host tasks, so this global
+  # service runs the upstream eBPF container next to itself through the Docker
+  # socket and removes it again when the task stops.
+  ebpf-host:
+    image: docker:29.4.0-cli@sha256:2efe7c8e806b35050def6ba1ba0ddad67b521a0a6d37f4910b3d88f11b495d03
+    entrypoint: ["/bin/sh", "/ebpf-host.sh"]
+    init: true
+    stop_grace_period: 100s
+    environment:
+      EBPF_IMAGE: *ebpf-image
+      NODE_HOSTNAME: "{{.Node.Hostname}}"
+      ENABLE_DOCKERPROBE: ${ENABLE_DOCKERPROBE:-true}
+      EBPF_CPUS: ${EBPF_CPUS:-1.0}
+      EBPF_MEM_RESERVATION: ${EBPF_MEM_RESERVATION:-1536m}
+      EBPF_MEM_LIMIT: ${EBPF_MEM_LIMIT:-2048m}
+      EBPF_GOMEMLIMIT: ${EBPF_GOMEMLIMIT:-1400MiB}
+    configs:
+      - source: ebpf-host
+        target: /ebpf-host.sh
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      resources:
+        limits:
+          memory: 64M
+
+configs:
+  collector-entrypoint:
+    file: collector-entrypoint.sh
+  ebpf-host:
+    file: ebpf-host.sh
+
+secrets:
+  collector_secret:
+    file: dev/collector_secret
+    x-rig-env: COLLECTOR_SECRET

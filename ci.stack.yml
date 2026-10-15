@@ -1,0 +1,21 @@
+# Only nodes labelled better-stack.collector=true run the collector:
+#
+#   docker node update --label-add better-stack.collector=true <node>
+#
+# Both services must land on the same nodes: the collector expects the eBPF
+# container's socket in /var/lib/better-stack.
+#
+# No overlay networks are attached by default. To let the collector reach a
+# database, attach its overlay network in a cluster overlay: see
+# cluster.stack.yml.example.
+services:
+  collector:
+    deploy:
+      placement:
+        constraints:
+          - node.labels.better-stack.collector == true
+  ebpf-host:
+    deploy:
+      placement:
+        constraints:
+          - node.labels.better-stack.collector == true

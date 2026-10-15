@@ -1,0 +1,6 @@
+.env
+.rig/
+# Cluster overlays name your networks; keep them local.
+*.stack.yml
+!stack.yml
+!ci.stack.yml
